@@ -1,0 +1,29 @@
+# build artifacts
+/build/
+/dist/
+/wheelhouse/
+*.egg-info/
+*__pycache__*
+*.pyc
+*.o
+
+# compiled binaries / libraries (rebuilt from source)
+/e5
+/e5cli
+/libe5.so
+/model_embed.o
+/model.bin
+*.so
+
+# large external assets (downloaded / regenerated, not source)
+/hf_src/
+
+# generated copies inside the package — setup.py recreates these from the
+# repo-root sources (e5.c / e5.h / e5-small-q4.bin) at build time
+/nanoe5/e5.c
+/nanoe5/e5.h
+/nanoe5/e5-small-q4.bin
+
+# virtualenvs
+/.venv/
+/venv/

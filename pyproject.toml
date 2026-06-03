@@ -1,0 +1,47 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nanoe5"
+version = "0.1.0"
+description = "nanoE5.c - blazing-fast 4-bit CPU text embeddings (multilingual-e5-small), model bundled, zero ML dependencies"
+readme = "README.md"
+requires-python = ">=3.8"
+license = { text = "MIT" }
+authors = [{ name = "nanoE5.c" }]
+keywords = ["embeddings", "e5", "multilingual-e5-small", "sentence-transformers",
+            "retrieval", "semantic-search", "cpu", "quantization", "4-bit"]
+dependencies = ["numpy"]
+classifiers = [
+    "Programming Language :: C",
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Text Processing :: Linguistic",
+    "Intended Audience :: Developers",
+]
+
+[project.urls]
+Homepage = "https://github.com/cnmoro/nanoe5.c"
+Repository = "https://github.com/cnmoro/nanoe5.c"
+Model = "https://huggingface.co/intfloat/multilingual-e5-small"
+
+[tool.setuptools]
+packages = ["nanoe5"]
+
+[tool.setuptools.package-data]
+nanoe5 = ["e5-small-q4.bin", "e5.h", "e5.c"]
+
+# ---------------------------------------------------------------------------
+# cibuildwheel: the engine has no CPython ABI (it is loaded via ctypes), so we
+# build ONE python-agnostic wheel per platform (see GenericWheel in setup.py).
+# Building a single CPython is enough to produce that py3-none-<plat> wheel.
+# ---------------------------------------------------------------------------
+[tool.cibuildwheel]
+build = "cp312-*"
+build-frontend = "build"
+test-requires = "numpy"
+test-command = "python -c \"import nanoe5, numpy as np; v = nanoe5.query('hello world'); assert v.shape == (384,) and abs(float(np.linalg.norm(v)) - 1.0) < 1e-2; print('nanoe5 wheel OK')\""
