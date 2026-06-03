@@ -19,8 +19,14 @@ download. Use ``query`` for search queries and ``passage`` for documents.
 """
 from ._core import E5
 
-__version__ = "0.1.0"
-__all__ = ["E5", "query", "passage", "encode", "get_model", "dim"]
+__version__ = "0.1.1"
+__all__ = ["E5", "query", "passage", "encode", "get_model", "dim", "serve"]
+
+
+def serve(*args, **kwargs):
+    """Start the OpenAI-compatible embeddings server (see nanoe5.server.serve)."""
+    from .server import serve as _serve
+    return _serve(*args, **kwargs)
 
 _default = None
 

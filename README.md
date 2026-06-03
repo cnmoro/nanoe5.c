@@ -19,10 +19,10 @@ P = nanoe5.passage(["doc a", "doc b"])           # (2, 384)
 scores = P @ q                                   # cosine similarity
 ```
 
-…or the server, one file and zero dependencies:
+…or run an **OpenAI-compatible server** (works with the official `openai` client):
 
 ```bash
-./e5 --server --port 8000          # OpenAI-compatible embeddings API
+nanoe5-serve --port 8000           # OpenAI-compatible embeddings API
 ```
 
 No PyTorch. No transformers. No ONNX. No BLAS. Just C, `libm`, and OpenMP.
@@ -74,29 +74,37 @@ binary runs with **no ML dependencies at all**.
 
 ---
 
-## Use it: the server
+## Use it: the OpenAI-compatible server
 
-Start it (the model is already inside the binary):
+Start a server with one command — **works with the official `openai` Python
+client out of the box** (verified against `openai>=1.0`):
 
 ```bash
-./e5 --server --host 0.0.0.0 --port 8000
+pip install nanoe5
+nanoe5-serve --port 8000          # OpenAI-compatible embeddings server
 ```
 
-It speaks the **OpenAI embeddings API**, so any OpenAI client works unchanged:
-
 ```python
-from openai import OpenAI
+from openai import OpenAI                       # the official OpenAI client
 
 client = OpenAI(base_url="http://localhost:8000/v1", api_key="not-needed")
 
 resp = client.embeddings.create(
-    model="e5-query",                       # see "Query vs passage" below
+    model="e5-query",                           # see "Query vs passage" below
     input=["how much protein per day", "best protein sources"],
 )
 embeddings = [d.embedding for d in resp.data]   # two 384-dim vectors
 ```
 
-…or just `curl`:
+Both `encoding_format="float"` and the client's default `"base64"` path are
+supported, so nothing in your existing OpenAI code needs to change — just point
+`base_url` at the server.
+
+> Prefer a **single dependency-free binary**? `make server` builds `./e5`, which
+> embeds the model and serves the same API with zero Python:
+> `./e5 --server --port 8000`.
+
+…or hit it with plain `curl`:
 
 ```bash
 curl http://localhost:8000/v1/embeddings \
@@ -139,15 +147,18 @@ by default, and it's fully supported.
 
 ### Server flags
 
+Both server forms take the same flags:
+
 ```
-./e5 --server [--host H] [--port P] [--threads N]
-              [--default-type query|passage] [--model FILE]
+nanoe5-serve  [--host H] [--port P] [--threads N] [--default-type query|passage] [--model FILE]
+./e5 --server [--host H] [--port P] [--threads N] [--default-type query|passage] [--model FILE]
 ```
 
 * `--threads N` caps OpenMP threads (default: all cores).
 * `--default-type` sets the modality when a request doesn't specify one
   (default `query`).
-* `--model FILE` loads an external `e5-small-q4.bin` instead of the embedded one.
+* `--model FILE` loads an external `e5-small-q4.bin` (the binary otherwise uses
+  its embedded copy; the pip server uses the bundled one).
 
 ---
 

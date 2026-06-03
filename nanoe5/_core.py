@@ -57,6 +57,8 @@ class E5:
         lib.e5_embed_batch.restype = ctypes.c_int
         lib.e5_embed_batch.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_char_p),
                                        ctypes.c_int, ctypes.c_int, ctypes.POINTER(ctypes.c_float)]
+        lib.e5_token_count.restype = ctypes.c_int
+        lib.e5_token_count.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_int]
         self._lib = lib
         self._m = lib.e5_load(model_path.encode())
         if not self._m:
@@ -92,6 +94,10 @@ class E5:
     def encode(self, texts, is_query=False):
         """Generic embed; ``is_query`` selects the prefix."""
         return self._encode(texts, is_query)
+
+    def token_count(self, text, is_query=False):
+        """Number of tokens (incl. specials) the model feeds for ``text``."""
+        return int(self._lib.e5_token_count(self._m, text.encode("utf-8"), int(is_query)))
 
     def __del__(self):
         m = getattr(self, "_m", None)

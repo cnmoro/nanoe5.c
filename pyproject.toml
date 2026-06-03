@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "nanoe5"
-version = "0.1.0"
-description = "nanoE5.c - blazing-fast 4-bit CPU text embeddings (multilingual-e5-small), model bundled, zero ML dependencies"
+version = "0.1.1"
+description = "nanoE5.c - blazing-fast 4-bit CPU text embeddings (multilingual-e5-small), model bundled, OpenAI-compatible server, zero ML dependencies"
 readme = "README.md"
 requires-python = ">=3.8"
 license = { text = "MIT" }
@@ -23,6 +23,9 @@ classifiers = [
     "Topic :: Text Processing :: Linguistic",
     "Intended Audience :: Developers",
 ]
+
+[project.scripts]
+nanoe5-serve = "nanoe5.server:main"
 
 [project.urls]
 Homepage = "https://github.com/cnmoro/nanoe5.c"
