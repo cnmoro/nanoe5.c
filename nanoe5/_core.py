@@ -118,17 +118,7 @@ class E5:
         """True if a sparse "latent terms" head (SAE) is attached."""
         return self.sparse_dim > 0
 
-    def sparse(self, text, top_k=256):
-        """Sparse latent-term vector for ``text`` (same recipe for query & doc).
-
-        Returns ``(indices, values)`` as int32 / float32 arrays, sorted by weight
-        descending. Score two sparse vectors with a dot over shared indices::
-
-            qi, qv = m.sparse(query);  di, dv = m.sparse(doc)
-            d = dict(zip(qi, qv));     score = sum(d.get(i, 0.0) * v for i, v in zip(di, dv))
-        """
-        if not self.sparse_dim:
-            raise RuntimeError("nanoe5: no sparse head loaded (need sae.bin)")
+    def _sparse_raw(self, text, top_k):
         idx = (ctypes.c_int32 * top_k)()
         val = (ctypes.c_float * top_k)()
         nnz = self._lib.e5_embed_sparse(self._m, text.encode("utf-8"), top_k, idx, val)
@@ -136,6 +126,45 @@ class E5:
             raise RuntimeError("nanoe5: sparse encoding failed")
         return (np.frombuffer(idx, dtype=np.int32, count=nnz).copy(),
                 np.frombuffer(val, dtype=np.float32, count=nnz).copy())
+
+    def sparse(self, texts, top_k=256, fmt="numpy"):
+        """Sparse "latent terms" vector(s); same recipe for query & doc.
+
+        ``fmt``:
+          * ``"numpy"``   (default) dense ``float32`` array — ``(sparse_dim,)``
+            for a single text, ``(N, sparse_dim)`` for a list.
+          * ``"scipy"``   a ``scipy.sparse.csr_matrix`` of shape ``(N, sparse_dim)``
+            (memory-efficient for indexing large corpora).
+          * ``"indices"`` raw ``(idx, val)`` int32/float32 arrays (or a list of
+            them for a list input) — handy for building an inverted index.
+
+        Score sparse vectors with a dot product, e.g. ``docs_sparse @ query_sparse``.
+        """
+        if not self.sparse_dim:
+            raise RuntimeError("nanoe5: no sparse head loaded (need sae.bin)")
+        single = isinstance(texts, str)
+        items = [texts] if single else list(texts)
+        raw = [self._sparse_raw(t, top_k) for t in items]
+
+        if fmt == "indices":
+            return raw[0] if single else raw
+        if fmt == "scipy":
+            from scipy.sparse import csr_matrix
+            data, indices, indptr = [], [], [0]
+            for ix, vl in raw:
+                order = np.argsort(ix)
+                indices.append(ix[order]); data.append(vl[order])
+                indptr.append(indptr[-1] + len(ix))
+            data = np.concatenate(data) if data and len(data[0]) else np.zeros(0, np.float32)
+            indices = np.concatenate(indices) if indices and len(indices[0]) else np.zeros(0, np.int32)
+            return csr_matrix((data, indices, np.array(indptr)),
+                              shape=(len(raw), self.sparse_dim), dtype=np.float32)
+        if fmt != "numpy":
+            raise ValueError("fmt must be 'numpy', 'scipy', or 'indices'")
+        out = np.zeros((len(raw), self.sparse_dim), dtype=np.float32)
+        for r, (ix, vl) in enumerate(raw):
+            out[r, ix] = vl
+        return out[0] if single else out
 
     def __del__(self):
         m = getattr(self, "_m", None)

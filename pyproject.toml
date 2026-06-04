@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "nanoe5"
-version = "0.1.1"
+version = "0.2.0"
 description = "nanoE5.c - blazing-fast 4-bit CPU text embeddings (multilingual-e5-small), model bundled, OpenAI-compatible server, zero ML dependencies"
 readme = "README.md"
 requires-python = ">=3.8"

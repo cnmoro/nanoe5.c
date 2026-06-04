@@ -19,8 +19,8 @@ download. Use ``query`` for search queries and ``passage`` for documents.
 """
 from ._core import E5
 
-__version__ = "0.1.1"
-__all__ = ["E5", "query", "passage", "encode", "get_model", "dim", "serve"]
+__version__ = "0.2.0"
+__all__ = ["E5", "query", "passage", "encode", "sparse", "get_model", "dim", "serve"]
 
 
 def serve(*args, **kwargs):
@@ -52,6 +52,11 @@ def passage(texts):
 def encode(texts, is_query=False):
     """Embed text(s); ``is_query`` selects the prefix."""
     return get_model().encode(texts, is_query)
+
+
+def sparse(texts, top_k=256, fmt="numpy"):
+    """Sparse "latent terms" vector(s) using the shared hot model."""
+    return get_model().sparse(texts, top_k=top_k, fmt=fmt)
 
 
 def dim():

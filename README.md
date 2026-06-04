@@ -245,8 +245,14 @@ English only**.
 from nanoe5 import E5
 m = E5()                          # auto-loads the bundled sae.bin
 m.has_sparse                      # True
-idx, val = m.sparse("quanta proteína por dia")   # top-k (feature_id, weight)
+v = m.sparse("quanta proteína por dia")          # dense (16384,) float32 (default)
+S = m.sparse(docs, fmt="scipy")                  # (N, 16384) scipy.sparse.csr_matrix
+i, w = m.sparse(text, fmt="indices")             # raw (feature_id, weight) arrays
 ```
+
+`m.sparse(...)` returns a **numpy array by default** — `(sparse_dim,)` for one
+text, `(N, sparse_dim)` for a list — or a `scipy.sparse.csr_matrix` with
+`fmt="scipy"` (use this to index large corpora).
 
 On standard benchmarks, **hybrid (dense + sparse) beats dense alone** — small but
 consistent across both languages (best at dense‑weight ≈ 0.8):
@@ -268,18 +274,15 @@ the dense vector structurally cannot.
 
 ```python
 import numpy as np
-def sdot(a, b):                                   # dot of two sparse vectors
-    d = dict(zip(a[0].tolist(), a[1].tolist()))
-    return sum(d.get(int(i), 0.0) * float(v) for i, v in zip(b[0], b[1]))
 
 # --- index time ---
-D = m.passage(docs)                               # (N, 384) dense
-S = [m.sparse(d) for d in docs]                   # N sparse vectors (store as postings)
+D = m.passage(docs)                  # (N, 384)  dense
+S = m.sparse(docs, fmt="scipy")      # (N, 16384) sparse  (use "numpy" for small corpora)
 
 # --- query time ---
 qd, qs = m.query(query), m.sparse(query)
-dense  = D @ qd                                   # cosine (vectors are normalized)
-sparse = np.array([sdot(qs, s) for s in S])       # or via an inverted index
+dense  = D @ qd                      # cosine (vectors are normalized)
+sparse = np.asarray(S @ qs).ravel()  # sparse dot
 def mm(x): return (x - x.min()) / (np.ptp(x) + 1e-9)
 score  = 0.8 * mm(dense) + 0.2 * mm(sparse)       # or Reciprocal Rank Fusion
 ```
