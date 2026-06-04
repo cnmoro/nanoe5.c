@@ -2,3 +2,4 @@ include README.md
 include nanoe5/e5.c
 include nanoe5/e5.h
 include nanoe5/e5-small-q4.bin
+include nanoe5/sae.bin

@@ -231,6 +231,75 @@ million-token inputs.
 
 ---
 
+## Sparse "latent terms" & hybrid retrieval (optional)
+
+A single dense vector has a fixed capacity; a high‑dimensional **sparse** vector
+can encode complementary lexical signal and improves recall. Inspired by
+mixedbread's [*latent terms*](https://www.mixedbread.com/blog/latent-terms),
+nanoE5.c can attach a **sparse head**: a TopK sparse autoencoder (`sae.bin`,
+3.6 MB) trained on e5 token embeddings that maps each token to a 16,384‑dim
+sparse code, max‑pooled over the document. It was trained on **Portuguese +
+English only**.
+
+```python
+from nanoe5 import E5
+m = E5()                          # auto-loads the bundled sae.bin
+m.has_sparse                      # True
+idx, val = m.sparse("quanta proteína por dia")   # top-k (feature_id, weight)
+```
+
+On standard benchmarks, **hybrid (dense + sparse) beats dense alone** — small but
+consistent across both languages (best at dense‑weight ≈ 0.8):
+
+| | nDCG@10 | Recall@100 |
+|---|---|---|
+| scifact (EN) dense | 0.654 | 0.917 |
+| scifact (EN) **hybrid** | **0.668** | **0.930** |
+| quati (PT‑BR) dense | 0.387 | 0.796 |
+| quati (PT‑BR) **hybrid** | **0.392** | **0.816** |
+
+### How to use it in a retrieval pipeline
+
+Two patterns — pick based on whether you want better **ranking** or better **recall**:
+
+**1. Hybrid retrieval (recommended — improves recall).** Index *both*
+representations and fuse at query time. Sparse catches exact/rare‑term matches
+the dense vector structurally cannot.
+
+```python
+import numpy as np
+def sdot(a, b):                                   # dot of two sparse vectors
+    d = dict(zip(a[0].tolist(), a[1].tolist()))
+    return sum(d.get(int(i), 0.0) * float(v) for i, v in zip(b[0], b[1]))
+
+# --- index time ---
+D = m.passage(docs)                               # (N, 384) dense
+S = [m.sparse(d) for d in docs]                   # N sparse vectors (store as postings)
+
+# --- query time ---
+qd, qs = m.query(query), m.sparse(query)
+dense  = D @ qd                                   # cosine (vectors are normalized)
+sparse = np.array([sdot(qs, s) for s in S])       # or via an inverted index
+def mm(x): return (x - x.min()) / (np.ptp(x) + 1e-9)
+score  = 0.8 * mm(dense) + 0.2 * mm(sparse)       # or Reciprocal Rank Fusion
+```
+
+At scale, put dense in an ANN index (HNSW/FAISS) and the sparse vectors in an
+**inverted index** (feature_id → postings); the SAE feature ids behave like
+terms. Both are first‑stage retrievers whose candidate sets you union, then fuse.
+
+**2. Dense‑retrieve → sparse rerank (cheaper, improves ranking only).** Take the
+dense top‑K, re‑score those K with `0.8·dense + 0.2·sparse`, reorder. This is
+what you proposed and it's the lightest option — but note a reranker can only
+reorder what dense already found, so it improves ordering, **not recall**. Most
+of the measured gain above is in Recall@100, which needs pattern 1.
+
+> The sparse head is optional: without `sae.bin`, `m.has_sparse` is `False` and
+> everything else works unchanged. Retrain it with `python sae_train.py` (uses a
+> GPU; PT+EN corpus only) and evaluate with `python sae_eval.py`.
+
+---
+
 ## CLI
 
 The same binary is also a quick CLI:
@@ -301,7 +370,9 @@ garbage barrage, and 400 concurrent requests with zero errors or races.
 e5.c / e5.h      the entire inference engine
 server.c         OpenAI-compatible HTTP server + CLI
 convert.py       build e5-small-q4.bin from the HF checkpoint (one-time)
-nanoe5/          the pip package (engine + 4-bit model bundled)
+sae_train.py     train the sparse "latent terms" head -> sae.bin (PT+EN, GPU)
+sae_eval.py      dense vs sparse vs hybrid retrieval eval (scifact + quati)
+nanoe5/          the pip package (engine + 4-bit model + sae.bin bundled)
 pyproject.toml   / setup.py   packaging (compiles the engine, bundles the model)
 e5.py            standalone ctypes wrapper (repo-local use)
 test_parity.py   parity vs HF reference + benchmark

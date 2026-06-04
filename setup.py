@@ -31,7 +31,7 @@ PKG = os.path.join(HERE, "nanoe5")
 
 # Keep the package self-contained: refresh the engine sources / model from the
 # repo root when present (dev builds); on install-from-sdist they already exist.
-for fn in ("e5.c", "e5.h", "e5-small-q4.bin"):
+for fn in ("e5.c", "e5.h", "e5-small-q4.bin", "sae.bin"):   # sae.bin is optional
     src, dst = os.path.join(HERE, fn), os.path.join(PKG, fn)
     if os.path.exists(src) and (not os.path.exists(dst) or
                                 os.path.getmtime(src) > os.path.getmtime(dst)):

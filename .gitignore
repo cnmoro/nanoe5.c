@@ -19,10 +19,15 @@
 /hf_src/
 
 # generated copies inside the package — setup.py recreates these from the
-# repo-root sources (e5.c / e5.h / e5-small-q4.bin) at build time
+# repo-root sources (e5.c / e5.h / e5-small-q4.bin / sae.bin) at build time
 /nanoe5/e5.c
 /nanoe5/e5.h
 /nanoe5/e5-small-q4.bin
+/nanoe5/sae.bin
+
+# SAE torch checkpoint (regenerable via sae_train.py; only sae.bin is needed)
+/sae.pt
+/hf_src/
 
 # virtualenvs
 /.venv/

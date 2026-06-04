@@ -3,6 +3,7 @@
 #define E5_H
 
 #include <stddef.h>
+#include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -34,8 +35,23 @@ int e5_embed(e5_model *m, const char *text, int is_query, float *out);
 int e5_embed_batch(e5_model *m, const char **texts, int n, int is_query,
                    float *out);
 
-/* Same as above but with an explicit prefix already chosen per call mode.
- * `is_query`: 1 -> "query: ", 0 -> "passage: ". Provided for completeness. */
+/* --- sparse "latent terms" via a trained TopK sparse autoencoder (SAE) -----
+ * Load a sparse head (sae.bin from sae_train.py); then e5_embed_sparse maps the
+ * encoder's token hidden states through the SAE and max-pools over tokens into
+ * a high-dimensional sparse vector for hybrid (dense + sparse) retrieval. */
+
+/* Attach a sparse head from sae.bin. Returns 0 on success. */
+int e5_load_sae(e5_model *m, const char *path);
+
+/* Number of sparse features (SAE latent dimension), or 0 if no SAE is loaded. */
+int e5_sparse_dim(const e5_model *m);
+
+/* Top-k sparse vector for `text`. Requires e5_load_sae. `out_idx`/`out_val`
+ * must hold `top_k` entries; returns the number of nonzeros (<= top_k), sorted
+ * by weight descending, or -1 if no SAE is loaded. Sparse uses the raw text
+ * (no query:/passage: prefix); the same recipe is used for queries and docs. */
+int e5_embed_sparse(e5_model *m, const char *text, int top_k,
+                    int32_t *out_idx, float *out_val);
 
 #ifdef __cplusplus
 }

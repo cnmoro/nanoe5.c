@@ -240,6 +240,11 @@ struct e5_model {
     layer_t *layers;
     tokenizer tok;
     void *map; size_t map_size;   /* mmap region */
+    /* optional sparse "latent terms" head (SAE), loaded from sae.bin */
+    int has_sae, sae_N, sae_k, sae_nb;
+    const block_q4_0 *sae_W;      /* [sae_N][sae_nb] 4-bit encoder rows */
+    const float *sae_bias;        /* [sae_N] folded bias (incl. centering) */
+    void *sae_map; size_t sae_map_size;
 };
 
 /* --------------------------- file directory --------------------------- */
@@ -411,7 +416,8 @@ static int tok_content(const tokenizer *t, const char *text,
  * segoff: nseg+1 segment offsets; out holds nseg*H embeddings */
 static int forward_batch(e5_model *m, const int *ids, const int *pos,
                          const int *sstart, const int *send,
-                         const int *segoff, int nseg, int T, float *out) {
+                         const int *segoff, int nseg, int T, float *out,
+                         float *hidden_out) {
     int H = m->H, FF = m->FF, NH = m->NH, hd = m->hd;
     size_t TH = (size_t)T * H;
     float *x   = (float *)malloc(TH * sizeof(float));
@@ -485,20 +491,23 @@ static int forward_batch(e5_model *m, const int *ids, const int *pos,
         add_layernorm(x, fo, ly->oln_w, ly->oln_b, T, H, m->eps);   /* x = LN(x+ffn) */
     }
 
-    /* mean pool each segment, then L2 normalize */
+    if (hidden_out) {
+        /* expose the final per-token hidden states (for the sparse path) */
+        memcpy(hidden_out, x, TH * sizeof(float));
+    } else {
+        /* mean pool each segment (raw; L2-normalization happens in embed_n) */
 #pragma omp parallel for schedule(static)
-    for (int sgi = 0; sgi < nseg; sgi++) {
-        float *o = out + (size_t)sgi * H;
-        for (int i = 0; i < H; i++) o[i] = 0.f;
-        int a = segoff[sgi], b = segoff[sgi + 1];
-        for (int t = a; t < b; t++) {
-            const float *r = x + (size_t)t * H;
-            for (int i = 0; i < H; i++) o[i] += r[i];
+        for (int sgi = 0; sgi < nseg; sgi++) {
+            float *o = out + (size_t)sgi * H;
+            for (int i = 0; i < H; i++) o[i] = 0.f;
+            int a = segoff[sgi], b = segoff[sgi + 1];
+            for (int t = a; t < b; t++) {
+                const float *r = x + (size_t)t * H;
+                for (int i = 0; i < H; i++) o[i] += r[i];
+            }
+            float invL = 1.f / (float)(b - a);
+            for (int i = 0; i < H; i++) o[i] *= invL;
         }
-        /* raw mean-pool only; L2-normalization happens after windows are
-         * recombined in embed_n (so sliding-window texts pool correctly). */
-        float invL = 1.f / (float)(b - a);
-        for (int i = 0; i < H; i++) o[i] *= invL;
     }
 
     free(x); free(q); free(k); free(v); free(ctx); free(ao); free(mid); free(fo);
@@ -588,7 +597,7 @@ static int embed_n(e5_model *m, const char **texts, int n, int is_query, float *
             for (int t = segoff[s]; t < segoff[s + 1]; t++) { sstart[t] = segoff[s]; send[t] = segoff[s + 1]; }
 
         float *segmean = (float *)malloc(sizeof(float) * (size_t)segc * H);
-        rc |= forward_batch(m, ids, pos, sstart, send, segoff, segc, (int)Tc, segmean);
+        rc |= forward_batch(m, ids, pos, sstart, send, segoff, segc, (int)Tc, segmean, NULL);
 
         for (int s = 0; s < segc; s++) {
             int wi = w0 + s, i = wt[wi];
@@ -625,6 +634,133 @@ int e5_embed_batch(e5_model *m, const char **texts, int n, int is_query, float *
 }
 
 int e5_dim(const e5_model *m) { return m->H; }
+
+/* ================== sparse "latent terms" (trained SAE) ================
+ * A TopK sparse autoencoder (sae.bin), trained on e5 token embeddings, maps
+ * each token's hidden state to a high-dimensional sparse code; max-pooling over
+ * tokens yields a sparse vector for hybrid (dense + sparse) retrieval. The
+ * encoder is a single 4-bit matmul reusing the int8xint4 kernel. */
+
+static void heap_sift(float *val, int32_t *idx, int p, int n) {
+    for (;;) {
+        int c = 2 * p + 1; if (c >= n) break;
+        if (c + 1 < n && val[c + 1] < val[c]) c++;
+        if (val[c] >= val[p]) break;
+        float tv = val[p]; val[p] = val[c]; val[c] = tv;
+        int32_t ti = idx[p]; idx[p] = idx[c]; idx[c] = ti;
+        p = c;
+    }
+}
+
+/* pre = ReLU(SAE_W . x + bias) per token; keep the top-k per token; max-pool
+ * the kept activations into pooled[sae_N]. */
+static void project_sae(e5_model *m, const int8_t *aq, const float *ad,
+                        const int32_t *as, int L, float *pooled) {
+    int H = m->H, N = m->sae_N, k = m->sae_k;
+    if (k > 512) k = 512;
+    float *pre = (float *)malloc((size_t)L * N * sizeof(float));
+    matmul_q4q8(m->sae_W, m->sae_bias, aq, ad, as, pre, L, N, H);
+    for (int t = 0; t < L; t++) {
+        const float *row = pre + (size_t)t * N;
+        float hv[512]; int32_t hidx[512]; int hn = 0;
+        for (int j = 0; j < N; j++) {
+            float v = row[j];
+            if (v <= 0.f) continue;             /* ReLU */
+            if (hn < k) {
+                hv[hn] = v; hidx[hn] = j; hn++;
+                if (hn == k) for (int s = k / 2 - 1; s >= 0; s--) heap_sift(hv, hidx, s, k);
+            } else if (v > hv[0]) { hv[0] = v; hidx[0] = j; heap_sift(hv, hidx, 0, k); }
+        }
+        for (int i = 0; i < hn; i++) if (hv[i] > pooled[hidx[i]]) pooled[hidx[i]] = hv[i];
+    }
+    free(pre);
+}
+
+/* Compute the top-k sparse latent-term vector for `text`. Requires a SAE head
+ * (e5_load_sae). `out_idx`/`out_val` hold top_k entries; returns the number of
+ * nonzeros (<= top_k), sorted by weight descending. Returns -1 if no SAE is
+ * loaded. Sparse uses the raw text (no query:/passage: prefix). */
+int e5_embed_sparse(e5_model *m, const char *text, int top_k,
+                    int32_t *out_idx, float *out_val) {
+    if (!m->has_sae) return -1;
+    int H = m->H, WMAX = m->MAXP - 2, nbmax = H / QK, N = m->sae_N;
+    size_t tl = strlen(text);
+    int capc = (int)tl + 4;
+    int *cont = (int *)malloc(sizeof(int) * (capc > 1 ? capc : 1));
+    int nc = tok_content(&m->tok, text, cont, capc);
+
+    float *pooled = (float *)calloc((size_t)N, sizeof(float));
+    int nwin = nc / WMAX + (nc % WMAX ? 1 : 0); if (nwin < 1) nwin = 1;
+    for (int w = 0; w < nwin; w++) {
+        int a = w * WMAX, b = a + WMAX; if (b > nc) b = nc;
+        int cl = b - a, L = cl + 2;
+        int *ids = (int *)malloc(sizeof(int) * L);
+        int *pos = (int *)malloc(sizeof(int) * L);
+        int *ss = (int *)malloc(sizeof(int) * L);
+        int *se = (int *)malloc(sizeof(int) * L);
+        int segoff2[2] = {0, L};
+        ids[0] = m->tok.bos; pos[0] = 0;
+        for (int j = 0; j < cl; j++) { ids[1 + j] = cont[a + j]; pos[1 + j] = 1 + j; }
+        ids[L - 1] = m->tok.eos; pos[L - 1] = L - 1;
+        for (int t = 0; t < L; t++) { ss[t] = 0; se[t] = L; }
+        float *hid = (float *)malloc((size_t)L * H * sizeof(float));
+        forward_batch(m, ids, pos, ss, se, segoff2, 1, L, NULL, hid);
+        if (cl > 0) {            /* encode content tokens only (skip bos/eos) */
+            const float *xc = hid + (size_t)H;
+            int8_t  *aq = (int8_t *)malloc((size_t)cl * H);
+            float   *ad = (float *)malloc((size_t)cl * nbmax * sizeof(float));
+            int32_t *as = (int32_t *)malloc((size_t)cl * nbmax * sizeof(int32_t));
+            quantize_acts(xc, cl, H, aq, ad, as);
+            project_sae(m, aq, ad, as, cl, pooled);
+            free(aq); free(ad); free(as);
+        }
+        free(ids); free(pos); free(ss); free(se); free(hid);
+    }
+    free(cont);
+
+    int hn = 0;
+    for (int j = 0; j < N; j++) {
+        float v = pooled[j];
+        if (v <= 0.f) continue;
+        if (hn < top_k) {
+            out_idx[hn] = j; out_val[hn] = v; hn++;
+            if (hn == top_k)
+                for (int s = top_k / 2 - 1; s >= 0; s--) heap_sift(out_val, out_idx, s, top_k);
+        } else if (v > out_val[0]) {
+            out_val[0] = v; out_idx[0] = j; heap_sift(out_val, out_idx, 0, top_k);
+        }
+    }
+    free(pooled);
+    for (int i = 1; i < hn; i++) {       /* sort kept features by weight desc */
+        float v = out_val[i]; int32_t id = out_idx[i]; int j = i - 1;
+        while (j >= 0 && out_val[j] < v) { out_val[j + 1] = out_val[j]; out_idx[j + 1] = out_idx[j]; j--; }
+        out_val[j + 1] = v; out_idx[j + 1] = id;
+    }
+    return hn;
+}
+
+/* Dimensionality of the sparse space (number of SAE features), or 0 if none. */
+int e5_sparse_dim(const e5_model *m) { return m->has_sae ? m->sae_N : 0; }
+
+/* Load a sparse "latent terms" head from sae.bin (produced by sae_train.py).
+ * Returns 0 on success. The buffer is mmap'd for the model's lifetime. */
+int e5_load_sae(e5_model *m, const char *path) {
+    int fd = open(path, O_RDONLY);
+    if (fd < 0) { fprintf(stderr, "e5: cannot open %s\n", path); return -1; }
+    struct stat sb; fstat(fd, &sb);
+    void *map = mmap(NULL, sb.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
+    close(fd);
+    if (map == MAP_FAILED) return -1;
+    const uint8_t *p = (const uint8_t *)map;
+    if (memcmp(p, "SAE1", 4) != 0) { munmap(map, sb.st_size); fprintf(stderr, "e5: bad sae.bin\n"); return -1; }
+    int32_t hdr[4]; memcpy(hdr, p + 4, 16);              /* N, d, QK, k */
+    if (hdr[1] != m->H || hdr[2] != QK) { munmap(map, sb.st_size); fprintf(stderr, "e5: sae dim mismatch\n"); return -1; }
+    m->sae_N = hdr[0]; m->sae_k = hdr[3]; m->sae_nb = hdr[1] / QK;
+    m->sae_bias = (const float *)(p + 20);
+    m->sae_W = (const block_q4_0 *)(p + 20 + (size_t)m->sae_N * sizeof(float));
+    m->sae_map = map; m->sae_map_size = sb.st_size; m->has_sae = 1;
+    return 0;
+}
 
 /* ------------------------------- loader -------------------------------
  * Parse a model image living at `base` (length `size`). `map`/`map_size`,
@@ -771,6 +907,7 @@ void e5_free(e5_model *m) {
     free(m->tok.offs); free(m->tok.scores); free(m->tok.ht);
     free(m->tok.norm_cp); free(m->tok.norm_off); free(m->tok.norm_out);
     free(m->layers);
+    if (m->sae_map) munmap(m->sae_map, m->sae_map_size);
     if (m->map) munmap(m->map, m->map_size);
     free(m);
 }
