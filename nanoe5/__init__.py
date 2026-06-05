@@ -19,7 +19,7 @@ download. Use ``query`` for search queries and ``passage`` for documents.
 """
 from ._core import E5
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 __all__ = ["E5", "query", "passage", "encode", "sparse", "get_model", "dim", "serve"]
 
 
@@ -31,34 +31,34 @@ def serve(*args, **kwargs):
 _default = None
 
 
-def get_model():
+def get_model(variant="original"):
     """Return the lazily-created, process-wide hot model."""
     global _default
-    if _default is None:
-        _default = E5()
+    if _default is None or getattr(_default, "variant", "original") != variant:
+        _default = E5(variant=variant)
     return _default
 
 
-def query(texts):
+def query(texts, variant="original"):
     """Embed text(s) with the ``query: `` prefix using the shared hot model."""
-    return get_model().query(texts)
+    return get_model(variant=variant).query(texts)
 
 
-def passage(texts):
+def passage(texts, variant="original"):
     """Embed text(s) with the ``passage: `` prefix using the shared hot model."""
-    return get_model().passage(texts)
+    return get_model(variant=variant).passage(texts)
 
 
-def encode(texts, is_query=False):
+def encode(texts, is_query=False, variant="original"):
     """Embed text(s); ``is_query`` selects the prefix."""
-    return get_model().encode(texts, is_query)
+    return get_model(variant=variant).encode(texts, is_query)
 
 
-def sparse(texts, top_k=256, fmt="numpy"):
+def sparse(texts, top_k=256, fmt="numpy", variant="original"):
     """Sparse "latent terms" vector(s) using the shared hot model."""
-    return get_model().sparse(texts, top_k=top_k, fmt=fmt)
+    return get_model(variant=variant).sparse(texts, top_k=top_k, fmt=fmt)
 
 
-def dim():
+def dim(variant="original"):
     """Embedding dimensionality (384)."""
-    return get_model().dim
+    return get_model(variant=variant).dim

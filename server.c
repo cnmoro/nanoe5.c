@@ -36,10 +36,12 @@
 #include <omp.h>
 #endif
 
-/* the model image, injected by `ld -r -b binary model.bin` */
+/* model images, injected by `ld -r -b binary model_*.bin` */
 #ifdef E5_EMBED
-extern const unsigned char _binary_model_bin_start[];
-extern const unsigned char _binary_model_bin_end[];
+extern const unsigned char _binary_model_original_bin_start[];
+extern const unsigned char _binary_model_original_bin_end[];
+extern const unsigned char _binary_model_enpt_bin_start[];
+extern const unsigned char _binary_model_enpt_bin_end[];
 #endif
 
 #define MAX_BODY     (256u * 1024u * 1024u)   /* 256 MB request cap */
@@ -52,6 +54,30 @@ static int       G_default_query = 1;          /* default modality: query */
 static const char *G_model_name = "multilingual-e5-small-q4";
 static pthread_mutex_t G_compute = PTHREAD_MUTEX_INITIALIZER;
 static sem_t     G_slots;
+
+typedef struct {
+    const char *key;
+    const char *name;
+#ifdef E5_EMBED
+    const unsigned char *start;
+    const unsigned char *end;
+#endif
+} builtin_model;
+
+static const builtin_model *builtin_variant(const char *key) {
+    static const builtin_model variants[] = {
+#ifdef E5_EMBED
+        {"original", "multilingual-e5-small-q4", _binary_model_original_bin_start, _binary_model_original_bin_end},
+        {"enpt", "portuguese-multilingual-e5-small-q4", _binary_model_enpt_bin_start, _binary_model_enpt_bin_end},
+#else
+        {"original", "multilingual-e5-small-q4"},
+        {"enpt", "portuguese-multilingual-e5-small-q4"},
+#endif
+    };
+    for (size_t i = 0; i < sizeof(variants) / sizeof(variants[0]); i++)
+        if (strcmp(variants[i].key, key) == 0) return &variants[i];
+    return NULL;
+}
 
 /* ============================ dynamic buffer =========================== */
 typedef struct { char *p; size_t len, cap; } buf;
@@ -470,11 +496,18 @@ static int run_server(const char *host, int port, int threads) {
 }
 
 /* ================================ main ================================ */
-static e5_model *load_default(const char *model_path) {
-    if (model_path) return e5_load(model_path);
+static e5_model *load_default(const char *model_path, const char *variant) {
+    if (model_path) { G_model_name = "custom-e5-q4"; return e5_load(model_path); }
 #ifdef E5_EMBED
-    size_t sz = (size_t)(_binary_model_bin_end - _binary_model_bin_start);
-    return e5_load_mem(_binary_model_bin_start, sz);
+    const builtin_model *bm = builtin_variant(variant ? variant : "original");
+    if (!bm) {
+        fprintf(stderr, "e5: unknown embedded variant '%s' (expected original or enpt)\n",
+                variant ? variant : "(null)");
+        return NULL;
+    }
+    G_model_name = bm->name;
+    size_t sz = (size_t)(bm->end - bm->start);
+    return e5_load_mem(bm->start, sz);
 #else
     fprintf(stderr, "e5: no embedded model in this build; pass --model PATH\n");
     return NULL;
@@ -484,12 +517,13 @@ static e5_model *load_default(const char *model_path) {
 static void usage(const char *a0) {
     fprintf(stderr,
         "usage:\n"
-        "  %s --server [--host H] [--port P] [--threads N] [--default-type query|passage] [--model FILE]\n"
-        "  %s [--model FILE] <query|passage> \"text\"\n", a0, a0);
+        "  %s --server [--host H] [--port P] [--threads N] [--default-type query|passage] [--variant original|enpt] [--model FILE]\n"
+        "  %s [--variant original|enpt] [--model FILE] <query|passage> \"text\"\n", a0, a0);
 }
 
 int main(int argc, char **argv) {
     const char *host = "0.0.0.0", *model_path = NULL;
+    const char *variant = "original";
     int port = 8000, server = 0, threads = 0;
     const char *cli_mode = NULL, *cli_text = NULL;
 
@@ -499,13 +533,14 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--port") && i + 1 < argc) port = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--threads") && i + 1 < argc) threads = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--model") && i + 1 < argc) model_path = argv[++i];
+        else if (!strcmp(argv[i], "--variant") && i + 1 < argc) variant = argv[++i];
         else if (!strcmp(argv[i], "--default-type") && i + 1 < argc) G_default_query = strcmp(argv[++i], "query") == 0;
         else if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) { usage(argv[0]); return 0; }
         else if (!cli_mode) cli_mode = argv[i];
         else if (!cli_text) cli_text = argv[i];
     }
 
-    G_model = load_default(model_path);
+    G_model = load_default(model_path, variant);
     if (!G_model) return 1;
     G_dim = e5_dim(G_model);
 

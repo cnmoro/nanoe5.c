@@ -2,7 +2,7 @@
 nanoe5._core - ctypes binding to the compiled C engine.
 
 Both the compiled engine (``_engine*.so``) and the 4-bit model
-(``e5-small-q4.bin``) are bundled inside this package, so there is nothing to
+(``e5-small-q4.bin`` / ``e5-small-enpt-q4.bin``) are bundled inside this package, so there is nothing to
 download or configure: construct :class:`E5` and embed.
 """
 import ctypes
@@ -12,7 +12,10 @@ import os
 import numpy as np
 
 _PKG = os.path.dirname(os.path.abspath(__file__))
-_MODEL = os.path.join(_PKG, "e5-small-q4.bin")
+_MODELS = {
+    "original": os.path.join(_PKG, "e5-small-q4.bin"),
+    "enpt": os.path.join(_PKG, "e5-small-enpt-q4.bin"),
+}
 
 
 def _find_engine():
@@ -37,8 +40,12 @@ class E5:
     >>> scores = P @ q
     """
 
-    def __init__(self, model_path=None, lib_path=None, num_threads=None, sae_path=None):
-        model_path = model_path or _MODEL
+    def __init__(self, model_path=None, lib_path=None, num_threads=None, sae_path=None, variant="original"):
+        if model_path is None:
+            if variant not in _MODELS:
+                raise ValueError("nanoe5: unknown variant %r (expected one of %s)" %
+                                 (variant, sorted(_MODELS)))
+            model_path = _MODELS[variant]
         lib_path = lib_path or _find_engine()
         if not os.path.exists(model_path):
             raise FileNotFoundError("nanoe5: model file not found: %s" % model_path)
@@ -72,6 +79,7 @@ class E5:
         if not self._m:
             raise RuntimeError("nanoe5: failed to load model")
         self.dim = lib.e5_dim(self._m)
+        self.variant = variant if model_path in _MODELS.values() else "custom"
 
         # auto-attach a sparse head if sae.bin is present (bundled or given)
         self.sparse_dim = 0

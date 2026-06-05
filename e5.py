@@ -16,11 +16,18 @@ import os
 import numpy as np
 
 _DIR = os.path.dirname(os.path.abspath(__file__))
+_MODELS = {
+    "original": os.path.join(_DIR, "e5-small-q4.bin"),
+    "enpt": os.path.join(_DIR, "e5-small-enpt-q4.bin"),
+}
 
 
 class E5:
-    def __init__(self, model_path=None, lib_path=None, num_threads=None):
-        model_path = model_path or os.path.join(_DIR, "e5-small-q4.bin")
+    def __init__(self, model_path=None, lib_path=None, num_threads=None, variant="original"):
+        if model_path is None:
+            if variant not in _MODELS:
+                raise ValueError(f"unknown variant {variant!r}; expected one of {sorted(_MODELS)}")
+            model_path = _MODELS[variant]
         lib_path = lib_path or os.path.join(_DIR, "libe5.so")
         if not os.path.exists(lib_path):
             raise FileNotFoundError(f"{lib_path} not found - run `make lib`")

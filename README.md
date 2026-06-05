@@ -5,7 +5,11 @@
 > A tiny C core (the `.c` is the whole point) packaged for one-command use:
 > `pip install nanoe5` from Python, or a single self-contained server binary.
 
-The 4-bit model is **bundled** — there is nothing to download or configure.
+Two 4-bit models are **bundled** — there is nothing to download or configure:
+
+* `original` → `intfloat/multilingual-e5-small`
+* `enpt` → [`cnmoro/portuguese-multilingual-e5-small`](https://huggingface.co/cnmoro/portuguese-multilingual-e5-small)
+
 Use it from Python in two lines, or run an OpenAI-compatible server from a
 single self-contained binary.
 
@@ -31,8 +35,8 @@ No PyTorch. No transformers. No ONNX. No BLAS. Just C, `libm`, and OpenMP.
 
 ## Why
 
-* **One file to deploy.** The 4-bit model is linked *inside* the `./e5` binary
-  (~69 MB). Copy it to a server and run — nothing to download, install, or mount.
+* **One file to deploy.** Both bundled 4-bit models are linked *inside* the
+  `./e5` binary. Copy it to a server and run — nothing to download, install, or mount.
 * **Fast where it counts.** ~2 ms to embed a single query on a desktop CPU —
   about **7× faster than `sentence-transformers`** for one-at-a-time serving.
 * **Tiny.** 72 MB 4-bit model vs 471 MB fp32. Instant startup (mmap).
@@ -59,8 +63,11 @@ fast path; other CPUs fall back to a portable scalar build automatically.
 ### From source (server binary + CLI)
 
 ```bash
-# 1. download + quantize the model -> e5-small-q4.bin  (one-time, ~72 MB)
+# 1. download + quantize the original model -> e5-small-q4.bin  (one-time, ~72 MB)
 make convert        # pip install torch transformers safetensors tokenizers numpy
+
+# optional: quantize the bundled EN+PT-pruned model -> e5-small-enpt-q4.bin
+make convert-enpt
 
 # 2a. build the self-contained server/CLI binary  ->  ./e5
 make server
@@ -69,8 +76,8 @@ make server
 make lib
 ```
 
-`make convert` is the only step that touches the Python ML stack. After it, the
-binary runs with **no ML dependencies at all**.
+`make convert` / `make convert-enpt` are the only steps that touch the Python ML
+stack. After that, the binary runs with **no ML dependencies at all**.
 
 ---
 
@@ -81,7 +88,7 @@ client out of the box** (verified against `openai>=1.0`):
 
 ```bash
 pip install nanoe5
-nanoe5-serve --port 8000          # OpenAI-compatible embeddings server
+nanoe5-serve --port 8000 --variant original   # or --variant enpt
 ```
 
 ```python
@@ -150,15 +157,18 @@ by default, and it's fully supported.
 Both server forms take the same flags:
 
 ```
-nanoe5-serve  [--host H] [--port P] [--threads N] [--default-type query|passage] [--model FILE]
-./e5 --server [--host H] [--port P] [--threads N] [--default-type query|passage] [--model FILE]
+nanoe5-serve  [--host H] [--port P] [--threads N] [--default-type query|passage] [--variant original|enpt] [--model FILE]
+./e5 --server [--host H] [--port P] [--threads N] [--default-type query|passage] [--variant original|enpt] [--model FILE]
 ```
 
 * `--threads N` caps OpenMP threads (default: all cores).
 * `--default-type` sets the modality when a request doesn't specify one
   (default `query`).
+* `--variant` selects which bundled model to serve:
+  * `original` → `multilingual-e5-small-q4`
+  * `enpt` → `portuguese-multilingual-e5-small-q4`
 * `--model FILE` loads an external `e5-small-q4.bin` (the binary otherwise uses
-  its embedded copy; the pip server uses the bundled one).
+  the selected bundled copy; the pip server uses the bundled one).
 
 ---
 
@@ -184,8 +194,16 @@ Or hold an explicit handle (e.g. to cap threads):
 
 ```python
 from nanoe5 import E5
-model = E5(num_threads=8)
+model = E5(num_threads=8, variant="enpt")      # or variant="original"
 model.query("...");  model.passage(["...", "..."])
+```
+
+You can also select the variant through the module helpers:
+
+```python
+import nanoe5
+
+q = nanoe5.query("quanta proteína por dia", variant="enpt")
 ```
 
 That's the whole API:
@@ -198,6 +216,15 @@ That's the whole API:
 
 A single text is parallelized across all CPU cores (low latency); a list is
 parallelized across texts (high throughput).
+
+### Bundled variants
+
+* `variant="original"` keeps the full multilingual tokenizer and weights from
+  `intfloat/multilingual-e5-small`.
+* `variant="enpt"` uses the bundled pruned tokenizer/weights from
+  `cnmoro/portuguese-multilingual-e5-small`, keeping English + Portuguese tokens.
+
+If `model_path=...` is given, it overrides `variant`.
 
 ---
 
@@ -309,6 +336,7 @@ The same binary is also a quick CLI:
 
 ```bash
 ./e5 query   "how much protein should a female eat"
+./e5 --variant enpt query "quanta proteína devo comer por dia"
 ./e5 passage "a document to index"
 ./e5 --model e5-small-q4.bin query "use an external model file"
 ```
@@ -355,15 +383,19 @@ throughput — but at 1/6th the footprint and zero dependencies.
 ## Validate & stress
 
 ```bash
-make test     # cosine parity vs the fp32 HF reference + speed
-make stress   # hard edge-case / concurrency / server suite
+make test                                   # original parity vs HF reference + speed
+E5_SRC=hf_src_enpt E5_MODEL=e5-small-enpt-q4.bin E5_VARIANT=enpt E5_TEXTSET=enpt python3 test_parity.py
+python3 test_variants.py                    # constructor/server variant wiring
+python3 bench_variants.py                   # original vs enpt speed
+env E5_VARIANT=original python3 stress_test.py
+env E5_VARIANT=enpt python3 stress_test.py
 ```
 
 `make stress` throws adversarial inputs at every layer and asserts: no crashes,
 no hangs, finite & unit-norm outputs, determinism, `batch == single` (exact),
 `server == binding` parity, `base64 == float` parity, real OpenAI-client
 compatibility, correct `4xx` handling for malformed requests, survival of a raw
-garbage barrage, and 400 concurrent requests with zero errors or races.
+garbage barrage, and concurrent requests with zero errors or races.
 
 ---
 
@@ -372,10 +404,10 @@ garbage barrage, and 400 concurrent requests with zero errors or races.
 ```
 e5.c / e5.h      the entire inference engine
 server.c         OpenAI-compatible HTTP server + CLI
-convert.py       build e5-small-q4.bin from the HF checkpoint (one-time)
+convert.py       build e5-small-q4.bin / e5-small-enpt-q4.bin from HF checkpoints
 sae_train.py     train the sparse "latent terms" head -> sae.bin (PT+EN, GPU)
 sae_eval.py      dense vs sparse vs hybrid retrieval eval (scifact + quati)
-nanoe5/          the pip package (engine + 4-bit model + sae.bin bundled)
+nanoe5/          the pip package (engine + both 4-bit models + sae.bin bundled)
 pyproject.toml   / setup.py   packaging (compiles the engine, bundles the model)
 e5.py            standalone ctypes wrapper (repo-local use)
 test_parity.py   parity vs HF reference + benchmark
@@ -385,5 +417,7 @@ Makefile
 
 ## License
 
-The code here is yours to use. The model weights are
-`intfloat/multilingual-e5-small` (MIT) — see the model card for details.
+The code here is yours to use. The bundled model weights are
+`intfloat/multilingual-e5-small` (MIT) and
+`cnmoro/portuguese-multilingual-e5-small` (MIT-compatible derivative of the same base) —
+see the model cards for details.

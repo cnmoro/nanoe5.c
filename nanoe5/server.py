@@ -27,7 +27,10 @@ import numpy as np
 
 from ._core import E5
 
-MODEL_NAME = "multilingual-e5-small-q4"
+MODEL_NAMES = {
+    "original": "multilingual-e5-small-q4",
+    "enpt": "portuguese-multilingual-e5-small-q4",
+}
 
 
 def _modality(req, default_query):
@@ -48,6 +51,7 @@ def _modality(req, default_query):
 
 class _Handler(BaseHTTPRequestHandler):
     model = None            # set by serve()
+    model_name = MODEL_NAMES["original"]
     lock = threading.Lock()
     default_query = True
     protocol_version = "HTTP/1.1"
@@ -73,7 +77,7 @@ class _Handler(BaseHTTPRequestHandler):
             self._json(200, {"status": "ok"})
         elif self.path == "/v1/models":
             self._json(200, {"object": "list", "data": [
-                {"id": MODEL_NAME, "object": "model", "owned_by": "nanoE5.c"}]})
+                {"id": self.model_name, "object": "model", "owned_by": "nanoE5.c"}]})
         else:
             self._err(404, "unknown route")
 
@@ -132,19 +136,20 @@ class _Handler(BaseHTTPRequestHandler):
         self._json(200, {
             "object": "list",
             "data": data,
-            "model": MODEL_NAME,
+            "model": self.model_name,
             "usage": {"prompt_tokens": total, "total_tokens": total},
         })
 
 
 def serve(host="0.0.0.0", port=8000, default_type="query",
-          num_threads=None, model_path=None):
+          num_threads=None, model_path=None, variant="original"):
     """Start the blocking OpenAI-compatible embeddings server."""
-    _Handler.model = E5(model_path=model_path, num_threads=num_threads)
+    _Handler.model = E5(model_path=model_path, num_threads=num_threads, variant=variant)
+    _Handler.model_name = MODEL_NAMES.get(variant, "custom-e5-q4")
     _Handler.default_query = (default_type == "query")
     httpd = ThreadingHTTPServer((host, port), _Handler)
-    print("nanoe5 OpenAI-compatible server on http://%s:%d  (dim %d, default %s)"
-          % (host, port, _Handler.model.dim, default_type), flush=True)
+    print("nanoe5 OpenAI-compatible server on http://%s:%d  (dim %d, default %s, variant %s)"
+          % (host, port, _Handler.model.dim, default_type, variant), flush=True)
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
@@ -160,8 +165,10 @@ def main(argv=None):
                     help="modality when a request doesn't specify input_type")
     ap.add_argument("--threads", type=int, default=None, help="cap OpenMP threads")
     ap.add_argument("--model", default=None, help="path to an external e5-small-q4.bin")
+    ap.add_argument("--variant", choices=sorted(MODEL_NAMES), default="original",
+                    help="bundled model variant to load when --model is not given")
     a = ap.parse_args(argv)
-    serve(a.host, a.port, a.default_type, a.threads, a.model)
+    serve(a.host, a.port, a.default_type, a.threads, a.model, a.variant)
 
 
 if __name__ == "__main__":

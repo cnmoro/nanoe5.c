@@ -12,19 +12,43 @@ import numpy as np
 from e5 import E5
 
 SRC = os.environ.get("E5_SRC", "hf_src")
+MODEL_PATH = os.environ.get("E5_MODEL")
+VARIANT = os.environ.get("E5_VARIANT", "original")
+TEXTSET = os.environ.get("E5_TEXTSET", "multilingual")
 
 
 def _timeit(fn):
     t0 = time.time(); fn(); return time.time() - t0
 
-TEXTS = [
-    "how much protein should a female eat",
-    "Como funciona a fotossíntese nas plantas?",
-    "The quick brown fox jumps over the lazy dog.",
-    "机器学习是人工智能的一个分支。",
-    "naïve café — ½ + ² = ?   multiple   spaces\tand\ttabs",
-    "Was ist die Hauptstadt von Deutschland?",
-]
+TEXTS_BY_SET = {
+    "multilingual": [
+        "how much protein should a female eat",
+        "Como funciona a fotossíntese nas plantas?",
+        "The quick brown fox jumps over the lazy dog.",
+        "机器学习是人工智能的一个分支。",
+        "naïve café — ½ + ² = ?   multiple   spaces\tand\ttabs",
+        "Was ist die Hauptstadt von Deutschland?",
+    ],
+    "enpt": [
+        "how much protein should a female eat",
+        "How do I cook rice without making it sticky?",
+        "Como funciona a fotossíntese nas plantas?",
+        "Quais alimentos têm mais proteína por porção?",
+        "naïve café — ½ + ² = ?   multiple   spaces\tand\ttabs",
+        "What is the capital of Germany?",
+    ],
+}
+TEXTS = TEXTS_BY_SET[TEXTSET]
+LONGS_BY_SET = {
+    "multilingual": [
+        ("Photosynthesis is the process used by plants to convert light. " * 60, False),
+        ("机器学习是人工智能的一个分支。" * 100, False),
+    ],
+    "enpt": [
+        ("Photosynthesis is the process used by plants to convert light. " * 60, False),
+        ("A fotossíntese permite que as plantas transformem luz em energia. " * 80, False),
+    ],
+}
 
 
 def ref_setup():
@@ -67,7 +91,7 @@ def _ref_window(tok, mdl, text, is_query, WMAX=510):
 
 def main():
     tok, ref_embed, ref_setup_model = ref_setup()
-    m = E5()
+    m = E5(model_path=MODEL_PATH, variant=VARIANT)
 
     # ---- embedding parity (also validates the tokenizer end-to-end) -----
     print("== embedding cosine vs fp32 reference ==")
@@ -98,10 +122,7 @@ def main():
 
     # ---- sliding window for >512-token inputs ---------------------------
     print("== sliding window (long inputs) ==")
-    longs = [
-        ("Photosynthesis is the process used by plants to convert light. " * 60, False),
-        ("机器学习是人工智能的一个分支。" * 100, False),
-    ]
+    longs = LONGS_BY_SET[TEXTSET]
     win_worst = 1.0
     for txt, isq in longs:
         ntok = len(tok(("query: " if isq else "passage: ") + txt,

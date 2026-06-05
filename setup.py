@@ -1,7 +1,8 @@
 """
 Build the nanoe5 C engine as a bundled shared object (loaded via ctypes).
 
-The engine source (``e5.c``/``e5.h``) and the 4-bit model (``e5-small-q4.bin``)
+The engine source (``e5.c``/``e5.h``) and the bundled 4-bit models
+(``e5-small-q4.bin`` / ``e5-small-enpt-q4.bin``)
 live inside the ``nanoe5/`` package, so the sdist/wheel is fully self-contained.
 
 ISA selection (via the ``NANOE5_ARCH`` env var):
@@ -31,7 +32,7 @@ PKG = os.path.join(HERE, "nanoe5")
 
 # Keep the package self-contained: refresh the engine sources / model from the
 # repo root when present (dev builds); on install-from-sdist they already exist.
-for fn in ("e5.c", "e5.h", "e5-small-q4.bin", "sae.bin"):   # sae.bin is optional
+for fn in ("e5.c", "e5.h", "e5-small-q4.bin", "e5-small-enpt-q4.bin", "sae.bin"):   # sae.bin is optional
     src, dst = os.path.join(HERE, fn), os.path.join(PKG, fn)
     if os.path.exists(src) and (not os.path.exists(dst) or
                                 os.path.getmtime(src) > os.path.getmtime(dst)):
